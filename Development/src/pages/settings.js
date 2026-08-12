@@ -69,6 +69,12 @@ const bridgeModes = [
 
 const pagingLimits = [
     {
+        // don't send any paging parameters, for Query APIs without
+        // pagination support
+        value: 0,
+        label: 'Off',
+    },
+    {
         value: 5,
         label: '5',
     },

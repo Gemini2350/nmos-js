@@ -496,7 +496,10 @@ const convertDataProviderRequestToHTTP = (
                     'query.rql=or(' +
                     params.ids.map(id => 'eq(id,' + id + ')').join(',') +
                     ')';
-                total_query += '&paging.limit=1000';
+                // Paging Limit 'Off' supports Query APIs without paging (501)
+                if (pagingLimit) {
+                    total_query += '&paging.limit=1000';
+                }
                 return {
                     url: resourceUrl(resource, `?${total_query}`),
                     options: { headers },
@@ -524,7 +527,10 @@ const convertDataProviderRequestToHTTP = (
                 } else {
                     total_query = params.target + '=' + params.id;
                 }
-                total_query += '&paging.limit=1000';
+                // Paging Limit 'Off' supports Query APIs without paging (501)
+                if (pagingLimit) {
+                    total_query += '&paging.limit=1000';
+                }
                 return {
                     url: resourceUrl(resource, `?${total_query}`),
                     options: { headers },
@@ -1114,7 +1120,9 @@ const dataProvider = async (type, resource, params) => {
     const pagingLimitRegex = /paging.limit=\d*/;
     let recordsToGet = pagingLimit;
     let result = null;
-    while (recordsToGet > 0) {
+    // do/while so a single unpaged request is still made when the
+    // Paging Limit setting is 'Off' (0)
+    do {
         const { url, options, referenceFilter } =
             convertDataProviderRequestToHTTP(
                 type,
@@ -1177,7 +1185,7 @@ const dataProvider = async (type, resource, params) => {
             }
             throw error;
         }
-    }
+    } while (recordsToGet > 0);
     if (result) {
         delete result.unfilteredTotal;
     }
