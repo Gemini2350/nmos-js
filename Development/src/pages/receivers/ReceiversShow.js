@@ -15,14 +15,20 @@ import {
 } from 'react-admin';
 import get from 'lodash/get';
 import { useTheme } from '@material-ui/styles';
+import emphasizedPaper from '../../theme/emphasizedPaper';
+import ActiveField from '../../components/ActiveField';
 import LinkChipField from '../../components/LinkChipField';
 import ConnectionShowActions from '../../components/ConnectionShowActions';
+import HintedTab from '../../components/HintedTab';
+import { CONNECTION_API_NOT_AVAILABLE } from '../../components/controlApiMessages';
 import ItemArrayField from '../../components/ItemArrayField';
-import ObjectField from '../../components/ObjectField';
+import AnnotationFields, {
+    AnnotationTagsField,
+    AnnotationTextField,
+} from '../../components/AnnotationFields';
 import {
     FORMATS,
     ParameterField,
-    TAGS,
     TRANSPORTS,
 } from '../../components/ParameterRegisters';
 import ResourceTitle from '../../components/ResourceTitle';
@@ -70,11 +76,13 @@ const ReceiversShowView = props => {
         }
     }, [basePath, record]);
 
+    const disabledHint =
+        get(record, '$connectionAPI') === null
+            ? CONNECTION_API_NOT_AVAILABLE
+            : '';
+
     const theme = useTheme();
-    const tabBackgroundColor =
-        theme.palette.type === 'light'
-            ? theme.palette.grey[100]
-            : theme.palette.grey[900];
+    const tabBackgroundColor = emphasizedPaper(theme);
     return (
         <>
             <div style={{ display: 'flex' }}>
@@ -96,8 +104,9 @@ const ReceiversShowView = props => {
                             to={`${props.basePath}/${props.id}/show/`}
                         />
                         {['active', 'staged'].map(key => (
-                            <Tab
+                            <HintedTab
                                 key={key}
+                                hint={disabledHint}
                                 label={labelize(key)}
                                 value={`${props.match.url}/${key}`}
                                 component={Link}
@@ -108,7 +117,8 @@ const ReceiversShowView = props => {
                                 name={key}
                             />
                         ))}
-                        <Tab
+                        <HintedTab
+                            hint={disabledHint}
                             label="Connect"
                             value={`${props.match.url}/connect`}
                             component={Link}
@@ -145,9 +155,11 @@ const ShowSummaryTab = ({ record, ...props }) => {
             <SimpleShowLayout>
                 <TextField label="ID" source="id" name="id" />
                 <TAIField source="version" />
-                <TextField source="label" name="label" />
-                <TextField source="description" name="description" />
-                <ObjectField register={TAGS} source="tags" />
+                <AnnotationFields>
+                    <AnnotationTextField source="label" />
+                    <AnnotationTextField source="description" />
+                    <AnnotationTagsField />
+                </AnnotationFields>
                 <SanitizedDivider />
                 <ParameterField source="transport" register={TRANSPORTS} />
                 {queryVersion() >= 'v1.2' && (
@@ -184,9 +196,10 @@ const ShowSummaryTab = ({ record, ...props }) => {
                 )}
                 <ParameterField source="format" register={FORMATS} />
                 {queryVersion() >= 'v1.2' && (
-                    <BooleanField
+                    <ActiveField
                         label="Active"
-                        source="subscription.active"
+                        record={record}
+                        resource="receivers"
                         name="active"
                     />
                 )}

@@ -11,20 +11,36 @@ import {
     SimpleShowLayout,
     SingleFieldList,
     TextField,
+    useNotify,
     useRecordContext,
+    useRefresh,
     useShowController,
 } from 'react-admin';
-import { Paper, Tab, Tabs, Typography } from '@material-ui/core';
+import {
+    Button,
+    Paper,
+    Tab,
+    Table,
+    TableBody,
+    TableCell,
+    TableHead,
+    TableRow,
+    Tabs,
+    Typography,
+} from '@material-ui/core';
 import { Link, Route } from 'react-router-dom';
-import get from 'lodash/get';
+import { get, isEmpty, map } from 'lodash';
 import { useTheme } from '@material-ui/styles';
+import emphasizedPaper from '../../theme/emphasizedPaper';
 import LinkChipField from '../../components/LinkChipField';
-import ObjectField from '../../components/ObjectField';
+import AnnotationFields, {
+    AnnotationTagsField,
+    AnnotationTextField,
+} from '../../components/AnnotationFields';
 import {
     CONTROL_TYPES,
     DEVICE_TYPES,
     ParameterField,
-    TAGS,
     unversionedParameter,
 } from '../../components/ParameterRegisters';
 import ResourceTitle from '../../components/ResourceTitle';
@@ -32,14 +48,27 @@ import SanitizedDivider from '../../components/SanitizedDivider';
 import TAIField from '../../components/TAIField';
 import UnsortableDatagrid from '../../components/UnsortableDatagrid';
 import UrlField from '../../components/URLField';
+import { CancelScheduledActivationIcon } from '../../icons';
 import labelize from '../../components/labelize';
+import dataProvider from '../../dataProvider';
 import {
+    BRIDGE_FORCED,
+    bridgeMode,
     buildIs12BrowserLaunchUrl,
+    deviceBridgeUrl,
     is12BrowserUrl,
     queryVersion,
 } from '../../settings';
+import HintedTab from '../../components/HintedTab';
+import { CHANNEL_MAPPING_API_NOT_AVAILABLE } from '../../components/controlApiMessages';
 import MappingShowActions from '../../components/MappingShowActions';
 import ChannelMappingMatrix from './ChannelMappingMatrix';
+
+// Channel Mapping tabs, and the Channel Mapping API data each one needs
+const channelMappingTabs = {
+    active_map: '$io',
+    activations: '$activations',
+};
 
 export const DevicesShow = props => {
     const controllerProps = useShowController(props);
@@ -61,16 +90,13 @@ const DevicesShowView = props => {
         }
     }, [record]);
 
-    useEffect(() => {
-        return function cleanup() {
-            window.localStorage.removeItem('Channel Mapping Expanded');
-        };
-    }, []);
+    const disabledHint =
+        get(record, '$channelmappingAPI') === null
+            ? CHANNEL_MAPPING_API_NOT_AVAILABLE
+            : '';
+
     const theme = useTheme();
-    const tabBackgroundColor =
-        theme.palette.type === 'light'
-            ? theme.palette.grey[100]
-            : theme.palette.grey[900];
+    const tabBackgroundColor = emphasizedPaper(theme);
     return (
         <>
             <div style={{ display: 'flex' }}>
@@ -91,18 +117,22 @@ const DevicesShowView = props => {
                             component={Link}
                             to={`${props.basePath}/${props.id}/show/`}
                         />
-                        {['active_map'].map(key => (
-                            <Tab
-                                key={key}
-                                label={labelize(key)}
-                                value={`${props.match.url}/${key}`}
-                                component={Link}
-                                to={`${props.basePath}/${props.id}/show/${key}`}
-                                disabled={
-                                    !get(record, '$io') || !useChannelMappingAPI
-                                }
-                            />
-                        ))}
+                        {Object.entries(channelMappingTabs).map(
+                            ([key, source]) => (
+                                <HintedTab
+                                    key={key}
+                                    hint={disabledHint}
+                                    label={labelize(key)}
+                                    value={`${props.match.url}/${key}`}
+                                    component={Link}
+                                    to={`${props.basePath}/${props.id}/show/${key}`}
+                                    disabled={
+                                        !get(record, source) ||
+                                        !useChannelMappingAPI
+                                    }
+                                />
+                            )
+                        )}
                     </Tabs>
                 </Paper>
                 <span style={{ flexGrow: 1 }} />
@@ -114,17 +144,45 @@ const DevicesShowView = props => {
             <Route exact path={`${props.basePath}/${props.id}/show/active_map`}>
                 <ShowActiveMapTab record={record} {...props} />
             </Route>
+            <Route
+                exact
+                path={`${props.basePath}/${props.id}/show/activations`}
+            >
+                <ShowActivationsTab record={record} {...props} />
+            </Route>
         </>
     );
 };
 
-const ControlAddressField = ({ record, source = 'href', deviceLabel }) => {
+const ControlAddressField = ({
+    record,
+    source = 'href',
+    deviceLabel,
+    deviceId,
+}) => {
     const href = get(record, source);
     const isDeviceControlProtocol =
         unversionedParameter(get(record, 'type')) === 'urn:x-nmos:control:ncp';
 
     if (isDeviceControlProtocol) {
-        const launchUrl = buildIs12BrowserLaunchUrl(href, deviceLabel);
+        // Forced Bridge: IS-12 launches against the bridge NCP path, not the
+        // Device control href. Auto / No Bridge keep the advertised href.
+        let ncpHref = href;
+        if (bridgeMode() === BRIDGE_FORCED && deviceId) {
+            const version = (get(record, 'type') || '').split('/').pop();
+            if (version) {
+                try {
+                    const url = new URL(
+                        deviceBridgeUrl(deviceId, 'ncp', version)
+                    );
+                    url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+                    ncpHref = url.toString();
+                } catch (e) {
+                    // fall back to the Device href
+                }
+            }
+        }
+        const launchUrl = buildIs12BrowserLaunchUrl(ncpHref, deviceLabel);
         const disabled = !is12BrowserUrl() || !launchUrl;
 
         if (disabled) {
@@ -146,7 +204,7 @@ const ControlAddressField = ({ record, source = 'href', deviceLabel }) => {
                 href="#"
                 variant="body2"
                 style={{ textDecoration: 'underline', cursor: 'pointer' }}
-                title={`Open IS-12 Browser\n${href}`}
+                title={`Open IS-12 Browser\n${ncpHref}`}
                 onClick={event => {
                     event.preventDefault();
                     window.open(launchUrl, '_blank', 'noopener,noreferrer');
@@ -169,11 +227,13 @@ const ShowSummaryTab = ({ record, ...props }) => {
             <SimpleShowLayout>
                 <TextField label="ID" source="id" />
                 <TAIField source="version" />
-                <TextField source="label" />
-                {queryVersion() >= 'v1.1' && <TextField source="description" />}
-                {queryVersion() >= 'v1.1' && (
-                    <ObjectField register={TAGS} source="tags" />
-                )}
+                <AnnotationFields>
+                    <AnnotationTextField source="label" />
+                    {queryVersion() >= 'v1.1' && (
+                        <AnnotationTextField source="description" />
+                    )}
+                    {queryVersion() >= 'v1.1' && <AnnotationTagsField />}
+                </AnnotationFields>
                 <SanitizedDivider />
                 <ParameterField source="type" register={DEVICE_TYPES} />
                 {queryVersion() >= 'v1.1' && (
@@ -182,6 +242,7 @@ const ShowSummaryTab = ({ record, ...props }) => {
                             <ControlAddressField
                                 source="href"
                                 label="Address"
+                                deviceId={record?.id}
                                 deviceLabel={record?.label}
                             />
                             <ParameterField
@@ -245,6 +306,116 @@ const ShowActiveMapTab = ({ record, ...props }) => {
                     isShow={true}
                     mapping={get(record, '$active.map')}
                 />
+            </SimpleShowLayout>
+        </ShowView>
+    );
+};
+
+// the changed output channels of a pending activation, e.g. 'output0 (0, 1)'
+const actionSummary = action =>
+    map(
+        action,
+        (channels, outputId) =>
+            `${outputId} (${Object.keys(channels).join(', ')})`
+    ).join('; ');
+
+const CancelActivationButton = ({ record, activationId }) => {
+    const notify = useNotify();
+    const refresh = useRefresh();
+    const [cancelling, setCancelling] = useState(false);
+    return (
+        <Button
+            color="primary"
+            disabled={cancelling}
+            onClick={async () => {
+                setCancelling(true);
+                try {
+                    await dataProvider('DELETE', 'devices', {
+                        id: record.id,
+                        activationId,
+                        previousData: record,
+                    });
+                    notify('Channel Mapping activation cancelled', 'info');
+                    refresh();
+                } catch (error) {
+                    notify(error.toString(), 'warning');
+                    setCancelling(false);
+                }
+            }}
+            startIcon={<CancelScheduledActivationIcon />}
+        >
+            Cancel
+        </Button>
+    );
+};
+
+// cf. ObjectField
+const ActivationsField = ({ record, source }) => {
+    const activations = get(record, source);
+    if (isEmpty(activations)) {
+        return (
+            <Typography variant="body2">{'No pending activations'}</Typography>
+        );
+    }
+    return (
+        <Table size="small">
+            <TableHead>
+                <TableRow>
+                    <TableCell>ID</TableCell>
+                    <TableCell>Mode</TableCell>
+                    <TableCell>Requested Time</TableCell>
+                    <TableCell>Activation Time</TableCell>
+                    <TableCell>Action</TableCell>
+                    <TableCell />
+                </TableRow>
+            </TableHead>
+            <TableBody>
+                {map(activations, (activation, activationId) => (
+                    <TableRow key={activationId}>
+                        <TableCell>{activationId}</TableCell>
+                        <TableCell>
+                            {get(activation, 'activation.mode')}
+                        </TableCell>
+                        <TableCell>
+                            <TAIField
+                                record={activation}
+                                source="activation.requested_time"
+                                mode="activation.mode"
+                            />
+                        </TableCell>
+                        <TableCell>
+                            <TAIField
+                                record={activation}
+                                source="activation.activation_time"
+                            />
+                        </TableCell>
+                        <TableCell>
+                            {actionSummary(get(activation, 'action'))}
+                        </TableCell>
+                        <TableCell>
+                            <CancelActivationButton
+                                record={record}
+                                activationId={activationId}
+                            />
+                        </TableCell>
+                    </TableRow>
+                ))}
+            </TableBody>
+        </Table>
+    );
+};
+ActivationsField.defaultProps = {
+    addLabel: true,
+};
+
+const ShowActivationsTab = ({ record, ...props }) => {
+    if (!record || get(record, '$activations') === undefined) {
+        return <Loading />;
+    }
+    return (
+        <ShowView {...props} title={<ResourceTitle />} actions={<Fragment />}>
+            <SimpleShowLayout>
+                <ActivationsField label="Pending" source="$activations" />
             </SimpleShowLayout>
         </ShowView>
     );

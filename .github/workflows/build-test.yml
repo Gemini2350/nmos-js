@@ -10,6 +10,36 @@ env:
   SECRET_GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
   SECRET_RESULTS_SHEET_ID: ${{ secrets.RESULTS_SHEET_ID }}
 jobs:
+  nmos_bridge_adapter:
+    runs-on: ubuntu-22.04
+    defaults:
+      run:
+        working-directory: nmos-bridge/adapter
+    steps:
+    - uses: actions/checkout@v7
+
+    - uses: actions/setup-node@v7
+
+    - name: unit test adapter
+      run: npm test
+
+  nmos_bridge_lua:
+    runs-on: ubuntu-22.04
+    defaults:
+      run:
+        working-directory: nmos-bridge/envoy
+    steps:
+    - uses: actions/checkout@v7
+
+    - name: install lua
+      working-directory: ${{ github.workspace }}
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y lua5.1
+
+    - name: unit test location rewrite
+      run: lua5.1 location_rewrite_test.lua -v
+
   build_and_test:
     runs-on: ubuntu-22.04
     steps:
@@ -31,7 +61,7 @@ jobs:
       run: |
         yarn run lint-check
         yarn run build
-        yarn test --passWithNoTests --coverage --watchAll=false
+        yarn test --coverage --watchAll=false
 
     - name: install python
       uses: actions/setup-python@v7

@@ -1,13 +1,10 @@
-import { Fragment, createContext, useContext, useState } from 'react';
+import { Fragment, createContext, useContext, useRef, useState } from 'react';
 import {
     ClickAwayListener,
     Divider,
-    IconButton,
     MenuItem,
     Table,
     TableBody,
-    TableCell,
-    TableHead,
     TableRow,
     Tooltip,
     Typography,
@@ -22,8 +19,35 @@ import {
 } from 'react-admin';
 import { get, isEmpty, set, setWith, toPath, unset } from 'lodash';
 import LinkChipField from '../../components/LinkChipField';
-import MappingButton from '../../components/MappingButton';
+import MatrixButton, { MatrixCellTip } from '../../components/MatrixButton';
 import CollapseButton from '../../components/CollapseButton';
+import {
+    CELL_BORDER,
+    CELL_EXTENT,
+    CELL_FRAME,
+    DiagonalEllipsisButton,
+    HEADING_EXTENT,
+    HEADING_INSET,
+    HorizontalEllipsisButton,
+    HorizontalLinkChipField,
+    MatrixCell,
+    MatrixColumnHeadCell,
+    MatrixHeadCell,
+    MatrixRowHeadCell,
+    MatrixTableContainer,
+    MatrixTableHead,
+    TableHeadCell,
+    VerticalEllipsisButton,
+    VerticalLinkChipField,
+    cellLine,
+    cornerColumnsLabelStyle,
+    cornerRowsLabelStyle,
+    gridEdgeColumnHeadStyle,
+    matrixCornerCellStyle,
+    matrixCornerStickyStyle,
+    matrixTableStyle,
+    stickyHeadingStyle,
+} from '../../components/matrixLayout';
 import FilterPanel, {
     BooleanFilter,
     NumberFilter,
@@ -32,6 +56,7 @@ import FilterPanel, {
 import CustomNameField from '../../components/CustomNameField';
 import CustomNamesContextProvider from '../../components/CustomNamesContextProvider';
 import useCustomNamesContext from '../../components/useCustomNamesContext';
+import useTableMaxHeight from '../../components/useTableMaxHeight';
 import { useJSONSetting } from '../../settings';
 import labelize from '../../components/labelize';
 import { getFilteredInputs, getFilteredOutputs } from './FilterMatrix';
@@ -45,58 +70,105 @@ const unsetCleanly = (object, path) => {
     } while (!isEmpty(pathArray) && isEmpty(get(object, pathArray)));
 };
 
-// passing variant="head" doesn't seem to work inside TableBody
-const TableHeadCell = props => <TableCell component="th" {...props} />;
-
-const mappingCellStyle = theme => ({
-    textAlign: 'center',
-    padding: '1px 2px',
-    border: `solid 1px ${
-        theme.palette.type === 'dark' ? '#515151' : '#e0e0e0'
-    }`,
-});
-
-const mappingHeadStyle = theme => ({
-    backgroundColor: theme.palette.type === 'dark' ? '#212121' : '#f5f5f5',
-});
-
-const MappingCell = withStyles(theme => ({
-    root: mappingCellStyle(theme),
-}))(TableCell);
-
-// for column and row headings
-const MappingHeadCell = withStyles(theme => ({
-    root: {
-        ...mappingCellStyle(theme),
-        ...mappingHeadStyle(theme),
-    },
-}))(TableHeadCell);
-
+// the corner is opaque so the rows scrolling underneath do not show through
 const MappingCornerCell = withStyles(theme => ({
     root: {
-        ...mappingCellStyle(theme),
-        borderLeft: 0,
-        borderTop: 0,
+        ...matrixCornerCellStyle(theme, 3),
+        ...matrixCornerStickyStyle,
     },
 }))(TableHeadCell);
 
-// de-emphasize these icons
-const faded = { opacity: 0.3 };
+const PARENT_HEADING_OFFSET = '--parent-heading-offset';
+// without an association heading beside it, the I/O heading is the first
+// cell of the row, and draws the table's left edge in its place
+const IO_HEADING_EDGE = '--io-heading-edge';
 
-// Midline Horizontal Ellipsis for when columns have been collapsed
-const HorizontalEllipsisButton = props => (
-    <IconButton size="small" style={faded} children={'\u22ef'} {...props} />
-);
+const MappingParentHeadCell = withStyles(theme => ({
+    root: {
+        ...stickyHeadingStyle(theme, 0),
+        // the association headings are the first cell of each row group, so
+        // they draw the table's left edge
+        borderLeft: cellLine(theme),
+    },
+}))(MatrixHeadCell);
 
-// Vertical Ellipsis for when rows have been collapsed
-const VerticalEllipsisButton = props => (
-    <IconButton size="small" style={faded} children={'\u22ee'} {...props} />
-);
+const MappingIOHeadCell = withStyles(theme => ({
+    root: {
+        ...stickyHeadingStyle(theme, `var(${PARENT_HEADING_OFFSET})`),
+        borderLeft: `solid var(${IO_HEADING_EDGE}) ${theme.palette.divider}`,
+        paddingLeft: HEADING_INSET,
+        // name then collapse button, in the reading direction
+        '& > div': {
+            display: 'flex',
+            alignItems: 'center',
+            overflow: 'hidden',
+        },
+        '& > div > div': {
+            flex: 1,
+            minWidth: 0,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+        },
+    },
+}))(MatrixRowHeadCell);
 
-// Down Right Diagonal Ellipsis for when both rows and columnns have been collapsed
-const DiagonalEllipsisButton = props => (
-    <IconButton size="small" style={faded} children={'\u22f1'} {...props} />
-);
+const MappingChannelHeadCell = withStyles(theme => ({
+    root: {
+        ...stickyHeadingStyle(
+            theme,
+            `calc(var(${PARENT_HEADING_OFFSET}) + ${HEADING_EXTENT}px)`
+        ),
+        paddingLeft: HEADING_INSET,
+        paddingRight: HEADING_INSET,
+    },
+}))(MatrixRowHeadCell);
+
+const MappingRowHeadCell = withStyles(theme => ({
+    root: {
+        ...stickyHeadingStyle(theme, 0),
+        // a row heading spanning the heading sections likewise begins its
+        // row, so it draws the left edge too
+        borderLeft: cellLine(theme),
+        paddingLeft: HEADING_INSET,
+        paddingRight: HEADING_INSET,
+    },
+}))(MatrixRowHeadCell);
+
+// the names read top-to-bottom, whatever they are, so the name block is
+// capped short of the cell's own border and padding
+const MappingColumnHeadCell = withStyles({
+    root: {
+        '& > div': {
+            boxSizing: 'border-box',
+            display: 'block',
+            margin: '0 auto',
+            maxHeight: HEADING_EXTENT - CELL_FRAME,
+            padding: `${HEADING_INSET}px 0`,
+            width: 'fit-content',
+            writingMode: 'vertical-rl',
+        },
+    },
+})(MatrixColumnHeadCell);
+
+// a chip is centered and inset by its own margin, as in the row headings
+const MappingParentColumnHeadCell = withStyles({
+    root: {
+        verticalAlign: 'middle',
+        '& > div': {
+            padding: 0,
+        },
+    },
+})(MappingColumnHeadCell);
+
+// the name is inset by the heading's own padding
+const MappingIOColumnHeadCell = withStyles({
+    root: gridEdgeColumnHeadStyle({
+        content: 'div',
+        frame: CELL_FRAME,
+        inset: HEADING_INSET,
+    }),
+})(MappingColumnHeadCell);
 
 const CustomNameFieldWithInputProps = ({
     classes: { input: inputClass, ...inheritedClasses },
@@ -139,11 +211,200 @@ const TooltipDivider = withStyles({
     },
 })(Divider);
 
-const InteractiveTooltipContext = createContext();
+const ConstraintWarning = withStyles(theme => ({
+    root: {
+        color:
+            theme.palette.type === 'light'
+                ? theme.palette.warning.dark
+                : theme.palette.warning.light,
+    },
+}))(Typography);
 
-const InteractiveTooltip = ({ title, ...props }) => {
+export const isRoutableInput = (outputItem, inputId) => {
+    const routableInputs = get(outputItem, 'caps.routable_inputs');
+    // null means that the Output has no routing restrictions. If the field is
+    // absent or malformed, leave validation to the Node.
+    return !Array.isArray(routableInputs) || routableInputs.includes(inputId);
+};
+
+const routableInputConstraintWarning = (outputItem, inputId) => {
+    if (isRoutableInput(outputItem, inputId)) return;
+    return inputId === null
+        ? "This output's routable inputs do not include Unrouted."
+        : "This output's routable inputs do not include this input.";
+};
+
+const setConstraintWarning = (
+    warnings,
+    outputId,
+    outputChannelIndex,
+    warning
+) => {
+    setWith(warnings, [outputId, outputChannelIndex], warning, Object);
+};
+
+export const channelMappingConstraintWarnings = (io, mapping) => {
+    const routableInputWarnings = {};
+    const blockSizeWarnings = {};
+    const reorderingWarnings = {};
+
+    for (const [outputId, outputMap] of Object.entries(mapping || {})) {
+        const outputItem = get(io, ['outputs', outputId]);
+        const entries = Object.entries(outputMap)
+            .sort(([left], [right]) => Number(left) - Number(right))
+            .map(([outputChannelIndex, entry]) => ({
+                outputChannelIndex,
+                outputIndex: Number(outputChannelIndex),
+                inputId: get(entry, 'input'),
+                inputIndex: get(entry, 'channel_index'),
+            }));
+
+        for (const entry of entries) {
+            const warning = routableInputConstraintWarning(
+                outputItem,
+                entry.inputId
+            );
+            if (warning) {
+                setConstraintWarning(
+                    routableInputWarnings,
+                    outputId,
+                    entry.outputChannelIndex,
+                    warning
+                );
+            }
+        }
+
+        const inputOffsets = {};
+        const reorderingViolationInputs = new Set();
+        let currentInputId;
+        let currentBlockSize;
+        let currentBlock = [];
+
+        const checkCurrentBlock = () => {
+            if (!currentBlock.length || !currentBlockSize) return;
+            const inputBlock = Math.floor(
+                currentBlock[0].inputIndex / currentBlockSize
+            );
+            const inputChannels = new Set(
+                currentBlock.map(({ inputIndex }) => inputIndex)
+            );
+            const complete =
+                currentBlock.length === currentBlockSize &&
+                inputChannels.size === currentBlockSize &&
+                currentBlock.every(
+                    ({ inputIndex }) =>
+                        Math.floor(inputIndex / currentBlockSize) === inputBlock
+                );
+            if (!complete) {
+                const warning = `This input requires channels to be routed in complete blocks of ${currentBlockSize}.`;
+                for (const { outputChannelIndex } of currentBlock) {
+                    setConstraintWarning(
+                        blockSizeWarnings,
+                        outputId,
+                        outputChannelIndex,
+                        warning
+                    );
+                }
+            }
+        };
+
+        for (const entry of entries) {
+            if (entry.inputId === null) continue;
+            const inputItem = get(io, ['inputs', entry.inputId]);
+            const blockSize = get(inputItem, 'caps.block_size');
+            if (
+                !Number.isInteger(entry.outputIndex) ||
+                !Number.isInteger(entry.inputIndex) ||
+                !Number.isInteger(blockSize) ||
+                blockSize < 1
+            ) {
+                checkCurrentBlock();
+                currentBlock = [];
+                currentInputId = undefined;
+                currentBlockSize = undefined;
+                continue;
+            }
+
+            if (entry.inputId !== currentInputId) {
+                checkCurrentBlock();
+                currentBlock = [];
+                currentInputId = entry.inputId;
+                currentBlockSize = blockSize;
+                if (get(inputItem, 'caps.reordering') === false) {
+                    if (entry.inputIndex % blockSize !== 0) {
+                        reorderingViolationInputs.add(entry.inputId);
+                    }
+                    if (
+                        !Object.prototype.hasOwnProperty.call(
+                            inputOffsets,
+                            entry.inputId
+                        )
+                    ) {
+                        inputOffsets[entry.inputId] =
+                            entry.inputIndex - entry.outputIndex;
+                    }
+                }
+            } else if (currentBlock.length === currentBlockSize) {
+                checkCurrentBlock();
+                currentBlock = [];
+            }
+
+            if (get(inputItem, 'caps.reordering') === false) {
+                const offset = entry.inputIndex - entry.outputIndex;
+                if (offset !== inputOffsets[entry.inputId]) {
+                    reorderingViolationInputs.add(entry.inputId);
+                }
+                if (
+                    currentBlock.length &&
+                    entry.inputIndex !==
+                        currentBlock[currentBlock.length - 1].inputIndex + 1
+                ) {
+                    reorderingViolationInputs.add(entry.inputId);
+                }
+            }
+            currentBlock.push(entry);
+        }
+        checkCurrentBlock();
+
+        const reorderingWarning =
+            'This input does not allow reordering; channels must keep a fixed offset on this output.';
+        for (const entry of entries) {
+            if (reorderingViolationInputs.has(entry.inputId)) {
+                setConstraintWarning(
+                    reorderingWarnings,
+                    outputId,
+                    entry.outputChannelIndex,
+                    reorderingWarning
+                );
+            }
+        }
+    }
+
+    const warnings = {};
+    for (const [outputId, outputMap] of Object.entries(mapping || {})) {
+        for (const outputChannelIndex of Object.keys(outputMap)) {
+            const warning =
+                get(routableInputWarnings, [outputId, outputChannelIndex]) ||
+                get(blockSizeWarnings, [outputId, outputChannelIndex]) ||
+                get(reorderingWarnings, [outputId, outputChannelIndex]);
+            if (warning) {
+                setConstraintWarning(
+                    warnings,
+                    outputId,
+                    outputChannelIndex,
+                    warning
+                );
+            }
+        }
+    }
+    return warnings;
+};
+
+const MappingHeadTooltipContext = createContext();
+
+const MappingHeadTooltip = ({ title, ...props }) => {
     const { tooltipModal, setTooltipModal } = useContext(
-        InteractiveTooltipContext
+        MappingHeadTooltipContext
     );
 
     const [open, setOpen] = useState(false);
@@ -194,7 +455,7 @@ const popperPropsOffset = (skidding, distance) => ({
 const popperPropsNearer = popperPropsOffset(0, -10);
 
 const OutputTooltip = ({ outputId, outputItem, getInputAPIName }) => {
-    const { setTooltipModal } = useContext(InteractiveTooltipContext);
+    const { setTooltipModal } = useContext(MappingHeadTooltipContext);
 
     const { getCustomName } = useCustomNamesContext();
     const source = `outputs.${outputId}.name`;
@@ -203,7 +464,6 @@ const OutputTooltip = ({ outputId, outputItem, getInputAPIName }) => {
         <>
             {'ID'}
             <Typography variant="body2">{outputId}</Typography>
-            <TooltipDivider />
             {'Name'}
             <TooltipCustomNameField
                 {...{
@@ -245,7 +505,7 @@ const OutputTooltip = ({ outputId, outputItem, getInputAPIName }) => {
 };
 
 const InputTooltip = ({ inputId, inputItem }) => {
-    const { setTooltipModal } = useContext(InteractiveTooltipContext);
+    const { setTooltipModal } = useContext(MappingHeadTooltipContext);
 
     const { getCustomName } = useCustomNamesContext();
     const source = `inputs.${inputId}.name`;
@@ -254,7 +514,6 @@ const InputTooltip = ({ inputId, inputItem }) => {
         <>
             {'ID'}
             <Typography variant="body2">{inputId}</Typography>
-            <TooltipDivider />
             {'Name'}
             <TooltipCustomNameField
                 {...{
@@ -296,7 +555,7 @@ const InputTooltip = ({ inputId, inputItem }) => {
 
 const ChannelTooltip = ({ ioResource, id, channelIndex, channelLabel }) => {
     const { getCustomName } = useCustomNamesContext();
-    const { setTooltipModal } = useContext(InteractiveTooltipContext);
+    const { setTooltipModal } = useContext(MappingHeadTooltipContext);
     const source = `${ioResource}.${id}.channels.${channelIndex}`;
     return (
         <>
@@ -329,6 +588,7 @@ const MappedCellTooltip = ({
     inputName,
     inputChannelIndex,
     inputChannelLabel,
+    constraintWarning,
 }) => (
     <>
         {'Input'}
@@ -345,17 +605,17 @@ const MappedCellTooltip = ({
             {outputChannelLabel}
             {outputChannelIndex && ` (Channel ${outputChannelIndex})`}
         </Typography>
+        {constraintWarning && (
+            <>
+                <TooltipDivider />
+                {'Expected Constraint Violation'}
+                <ConstraintWarning variant="body2">
+                    {constraintWarning}
+                </ConstraintWarning>
+            </>
+        )}
     </>
 );
-
-const truncateValueAtLength = (value, maxLength) => {
-    const ellipsis = '\u2026';
-    return maxLength !== undefined &&
-        !isNaN(maxLength) &&
-        value.length > maxLength
-        ? value.substring(0, maxLength) + ellipsis
-        : value;
-};
 
 const OutputSourceTooltip = ({ outputItem }) => (
     <>
@@ -419,9 +679,9 @@ const OutputSourceTooltip = ({ outputItem }) => (
     </>
 );
 
-const OutputSourceAssociation = ({ outputs, isExpanded, truncateValue }) =>
+const OutputSourceAssociation = ({ outputs, isExpanded }) =>
     outputs.map(([outputId, outputItem]) => (
-        <MappingHeadCell
+        <MappingParentColumnHeadCell
             colSpan={
                 isExpanded(outputId)
                     ? Object.keys(outputItem.channels).length
@@ -430,7 +690,7 @@ const OutputSourceAssociation = ({ outputs, isExpanded, truncateValue }) =>
             key={outputId}
         >
             {get(outputItem, 'source_id') ? (
-                <InteractiveTooltip
+                <MappingHeadTooltip
                     title={<OutputSourceTooltip {...{ outputItem }} />}
                     placement="top"
                     arrow
@@ -445,12 +705,12 @@ const OutputSourceAssociation = ({ outputs, isExpanded, truncateValue }) =>
                             reference="sources"
                             link="show"
                         >
-                            <LinkChipField transform={truncateValue} />
+                            <VerticalLinkChipField />
                         </ReferenceField>
                     </div>
-                </InteractiveTooltip>
+                </MappingHeadTooltip>
             ) : (
-                <InteractiveTooltip
+                <MappingHeadTooltip
                     title={
                         <Typography variant="body2">{'No Source'}</Typography>
                     }
@@ -458,10 +718,10 @@ const OutputSourceAssociation = ({ outputs, isExpanded, truncateValue }) =>
                     arrow
                     PopperProps={popperPropsNearer}
                 >
-                    <div>{truncateValue('No Source')}</div>
-                </InteractiveTooltip>
+                    <div>{'No Source'}</div>
+                </MappingHeadTooltip>
             )}
-        </MappingHeadCell>
+        </MappingParentColumnHeadCell>
     ));
 
 // parent.type is 'source' or 'receiver'
@@ -485,25 +745,21 @@ const InputParentTooltip = ({ inputItem }) => (
     </>
 );
 
-const InputParentAssociation = ({
-    isInputExpanded,
-    inputItem,
-    truncateValue,
-}) => (
-    <MappingHeadCell
+const InputParentAssociation = ({ isInputExpanded, inputItem }) => (
+    <MappingParentHeadCell
         rowSpan={isInputExpanded ? Object.keys(inputItem.channels).length : 1}
     >
         {inputItem.parent.type === null ? (
-            <InteractiveTooltip
+            <MappingHeadTooltip
                 title={<Typography variant="body2">{'No Parent'}</Typography>}
                 placement="left"
                 arrow
                 PopperProps={popperPropsNearer}
             >
-                <div>{truncateValue('No Parent')}</div>
-            </InteractiveTooltip>
+                <div>{'No Parent'}</div>
+            </MappingHeadTooltip>
         ) : (
-            <InteractiveTooltip
+            <MappingHeadTooltip
                 title={<InputParentTooltip inputItem={inputItem} />}
                 placement="left"
                 arrow
@@ -511,30 +767,122 @@ const InputParentAssociation = ({
             >
                 <div>
                     <InputParentReferenceField record={inputItem} link="show">
-                        <LinkChipField transform={truncateValue} />
+                        <HorizontalLinkChipField />
                     </InputParentReferenceField>
                 </div>
-            </InteractiveTooltip>
+            </MappingHeadTooltip>
         )}
-    </MappingHeadCell>
+    </MappingParentHeadCell>
 );
 
 const MappingCellsForCollapsedInput = ({ outputs, isOutputExpanded }) =>
     outputs.map(([outputId, outputItem]) =>
         isOutputExpanded(outputId) ? (
             Object.entries(outputItem.channels).map(([channelIndex, _]) => (
-                <MappingCell key={channelIndex}>
+                <MatrixCell key={channelIndex}>
                     <VerticalEllipsisButton disabled />
-                </MappingCell>
+                </MatrixCell>
             ))
         ) : (
-            <MappingCell key={outputId}>
+            <MatrixCell key={outputId}>
                 <DiagonalEllipsisButton disabled />
-            </MappingCell>
+            </MatrixCell>
         )
     );
 
+const ChannelMappingCell = ({
+    cellTip,
+    outputId,
+    outputItem,
+    outputChannelIndex,
+    outputChannel,
+    inputId,
+    inputName,
+    inputChannelIndex,
+    inputChannel,
+    mappingDisabled,
+    handleMap,
+    isMapped,
+    getConstraintWarning,
+}) => {
+    const { getCustomName } = useCustomNamesContext();
+    const constraintWarning = getConstraintWarning(
+        inputId,
+        outputId,
+        inputChannelIndex,
+        outputChannelIndex,
+        outputItem
+    );
+    const checked = isMapped(
+        inputId,
+        outputId,
+        inputChannelIndex,
+        outputChannelIndex
+    );
+
+    return (
+        <MatrixCell>
+            {
+                // the disabled button does not take pointer events, so this
+                // div does, as Material-UI asks of a tooltip on a disabled
+                // control
+            }
+            <div
+                onPointerEnter={event =>
+                    cellTip.current.open(
+                        event.currentTarget,
+                        <MappedCellTooltip
+                            outputName={
+                                getCustomName(`outputs.${outputId}.name`) ||
+                                outputItem.properties.name
+                            }
+                            outputChannelIndex={outputChannelIndex}
+                            outputChannelLabel={
+                                getCustomName(
+                                    `outputs.${outputId}.channels.${outputChannelIndex}`
+                                ) || outputChannel.label
+                            }
+                            inputName={
+                                inputId === null
+                                    ? 'Unrouted'
+                                    : getCustomName(`inputs.${inputId}.name`) ||
+                                      inputName
+                            }
+                            inputChannelIndex={inputChannelIndex}
+                            inputChannelLabel={
+                                inputChannel &&
+                                (getCustomName(
+                                    `inputs.${inputId}.channels.${inputChannelIndex}`
+                                ) ||
+                                    inputChannel.label)
+                            }
+                            constraintWarning={constraintWarning}
+                        />
+                    )
+                }
+                onPointerLeave={() => cellTip.current.close()}
+            >
+                <MatrixButton
+                    disabled={mappingDisabled}
+                    onClick={() =>
+                        handleMap(
+                            inputId,
+                            outputId,
+                            inputChannelIndex,
+                            outputChannelIndex
+                        )
+                    }
+                    checked={checked}
+                    constraintWarning={constraintWarning}
+                    showOnHover={Boolean(constraintWarning) && !checked}
+                />
+            </div>
+        </MatrixCell>
+    );
+};
+
 const InputChannelMappingCells = ({
+    cellTip,
     inputChannel,
     inputChannelIndex,
     inputName,
@@ -544,13 +892,13 @@ const InputChannelMappingCells = ({
     mappingDisabled,
     handleMap,
     isMapped,
-    truncateValue,
+    getConstraintWarning,
 }) => {
     const { getCustomName } = useCustomNamesContext();
     return (
         <>
-            <MappingHeadCell key={inputChannelIndex}>
-                <InteractiveTooltip
+            <MappingChannelHeadCell key={inputChannelIndex}>
+                <MappingHeadTooltip
                     title={
                         <ChannelTooltip
                             {...{
@@ -566,83 +914,41 @@ const InputChannelMappingCells = ({
                     PopperProps={popperPropsNearer}
                 >
                     <div>
-                        {truncateValue(
-                            getCustomName(
-                                `inputs.${inputId}.channels.${inputChannelIndex}`
-                            ) || inputChannel.label
-                        )}
+                        {getCustomName(
+                            `inputs.${inputId}.channels.${inputChannelIndex}`
+                        ) || inputChannel.label}
                     </div>
-                </InteractiveTooltip>
-            </MappingHeadCell>
+                </MappingHeadTooltip>
+            </MappingChannelHeadCell>
             <>
                 {outputs.map(([outputId, outputItem]) =>
                     isOutputExpanded(outputId) ? (
                         Object.entries(outputItem.channels).map(
                             ([outputChannelIndex, outputChannel]) => (
-                                <MappingCell key={outputChannelIndex}>
-                                    <InteractiveTooltip
-                                        title={
-                                            <MappedCellTooltip
-                                                outputName={
-                                                    getCustomName(
-                                                        `outputs.${outputId}.name`
-                                                    ) ||
-                                                    outputItem.properties.name
-                                                }
-                                                outputChannelIndex={
-                                                    outputChannelIndex
-                                                }
-                                                outputChannelLabel={
-                                                    getCustomName(
-                                                        `outputs.${outputId}.channels.${outputChannelIndex}`
-                                                    ) || outputChannel.label
-                                                }
-                                                inputName={
-                                                    getCustomName(
-                                                        `inputs.${inputId}.name`
-                                                    ) || inputName
-                                                }
-                                                inputChannelIndex={
-                                                    inputChannelIndex
-                                                }
-                                                inputChannelLabel={
-                                                    getCustomName(
-                                                        `inputs.${inputId}.channels.${inputChannelIndex}`
-                                                    ) || inputChannel.label
-                                                }
-                                            />
-                                        }
-                                        placement="bottom-start"
-                                        arrow
-                                        PopperProps={popperPropsOffset(40, -10)}
-                                    >
-                                        <div>
-                                            <MappingButton
-                                                disabled={mappingDisabled}
-                                                onClick={() =>
-                                                    handleMap(
-                                                        inputId,
-                                                        outputId,
-                                                        inputChannelIndex,
-                                                        outputChannelIndex
-                                                    )
-                                                }
-                                                checked={isMapped(
-                                                    inputId,
-                                                    outputId,
-                                                    inputChannelIndex,
-                                                    outputChannelIndex
-                                                )}
-                                            />
-                                        </div>
-                                    </InteractiveTooltip>
-                                </MappingCell>
+                                <ChannelMappingCell
+                                    key={outputChannelIndex}
+                                    {...{
+                                        cellTip,
+                                        outputId,
+                                        outputItem,
+                                        outputChannelIndex,
+                                        outputChannel,
+                                        inputId,
+                                        inputName,
+                                        inputChannelIndex,
+                                        inputChannel,
+                                        mappingDisabled,
+                                        handleMap,
+                                        isMapped,
+                                        getConstraintWarning,
+                                    }}
+                                />
                             )
                         )
                     ) : (
-                        <MappingCell key={outputId}>
+                        <MatrixCell key={outputId}>
                             <HorizontalEllipsisButton disabled />
-                        </MappingCell>
+                        </MatrixCell>
                     )
                 )}
             </>
@@ -651,74 +957,47 @@ const InputChannelMappingCells = ({
 };
 
 const UnroutedRow = ({
+    cellTip,
     outputs,
+    headingSections,
     mappingDisabled,
     handleMap,
     isMapped,
+    getConstraintWarning,
     isOutputExpanded,
 }) => {
-    const { getCustomName } = useCustomNamesContext();
     return (
         <TableRow>
-            <MappingHeadCell colSpan={3}>{'Unrouted'}</MappingHeadCell>
+            <MappingRowHeadCell colSpan={headingSections}>
+                {'Unrouted'}
+            </MappingRowHeadCell>
             {outputs.map(([outputId, outputItem]) =>
                 isOutputExpanded(outputId) ? (
                     Object.entries(outputItem.channels).map(
                         ([outputChannelIndex, outputChannel]) => (
-                            <MappingCell key={outputChannelIndex}>
-                                <InteractiveTooltip
-                                    title={
-                                        <MappedCellTooltip
-                                            outputName={
-                                                getCustomName(
-                                                    `outputs.${outputId}.name`
-                                                ) || outputItem.properties.name
-                                            }
-                                            outputChannelIndex={
-                                                outputChannelIndex
-                                            }
-                                            outputChannelLabel={
-                                                getCustomName(
-                                                    `outputs.${outputId}.channels.${outputChannelIndex}`
-                                                ) || outputChannel.label
-                                            }
-                                            inputName="Unrouted"
-                                        />
-                                    }
-                                    placement="bottom-start"
-                                    arrow
-                                    PopperProps={popperPropsOffset(
-                                        '75%',
-                                        '-25%'
-                                    )}
-                                >
-                                    <div>
-                                        <MappingButton
-                                            disabled={mappingDisabled}
-                                            onClick={() =>
-                                                handleMap(
-                                                    null,
-                                                    outputId,
-                                                    null,
-                                                    outputChannelIndex
-                                                )
-                                            }
-                                            checked={isMapped(
-                                                null,
-                                                outputId,
-                                                null,
-                                                outputChannelIndex
-                                            )}
-                                        />
-                                    </div>
-                                </InteractiveTooltip>
-                            </MappingCell>
+                            <ChannelMappingCell
+                                key={outputChannelIndex}
+                                {...{
+                                    cellTip,
+                                    outputId,
+                                    outputItem,
+                                    outputChannelIndex,
+                                    outputChannel,
+                                    mappingDisabled,
+                                    handleMap,
+                                    isMapped,
+                                    getConstraintWarning,
+                                }}
+                                inputId={null}
+                                inputName="Unrouted"
+                                inputChannelIndex={null}
+                            />
                         )
                     )
                 ) : (
-                    <MappingCell key={outputId}>
+                    <MatrixCell key={outputId}>
                         <HorizontalEllipsisButton disabled />
-                    </MappingCell>
+                    </MatrixCell>
                 )
             )}
         </TableRow>
@@ -726,18 +1005,19 @@ const UnroutedRow = ({
 };
 
 const OutputsHeadRow = ({
+    cornerCells,
     outputs,
     getInputAPIName,
     isOutputExpanded,
     onExpandOutput,
-    truncateValue,
 }) => {
     const { getCustomName } = useCustomNamesContext();
     return (
         <>
             <TableRow>
+                {cornerCells}
                 {outputs.map(([outputId, outputItem]) => (
-                    <MappingHeadCell
+                    <MappingIOColumnHeadCell
                         colSpan={
                             isOutputExpanded(outputId)
                                 ? Object.keys(outputItem.channels).length
@@ -746,7 +1026,7 @@ const OutputsHeadRow = ({
                         rowSpan={isOutputExpanded(outputId) ? 1 : 2}
                         key={outputId}
                     >
-                        <InteractiveTooltip
+                        <MappingHeadTooltip
                             title={
                                 <OutputTooltip
                                     {...{
@@ -761,12 +1041,10 @@ const OutputsHeadRow = ({
                             PopperProps={popperPropsNearer}
                         >
                             <div>
-                                {truncateValue(
-                                    getCustomName(`outputs.${outputId}.name`) ||
-                                        outputItem.properties.name
-                                )}
+                                {getCustomName(`outputs.${outputId}.name`) ||
+                                    outputItem.properties.name}
                             </div>
-                        </InteractiveTooltip>
+                        </MappingHeadTooltip>
                         <CollapseButton
                             onClick={() => onExpandOutput(outputId)}
                             isExpanded={isOutputExpanded(outputId)}
@@ -776,7 +1054,7 @@ const OutputsHeadRow = ({
                                     : 'View channels'
                             }
                         />
-                    </MappingHeadCell>
+                    </MappingIOColumnHeadCell>
                 ))}
             </TableRow>
             <TableRow>
@@ -784,8 +1062,8 @@ const OutputsHeadRow = ({
                     isOutputExpanded(outputId)
                         ? Object.entries(outputItem.channels).map(
                               ([channelIndex, channel]) => (
-                                  <MappingHeadCell key={channelIndex}>
-                                      <InteractiveTooltip
+                                  <MappingColumnHeadCell key={channelIndex}>
+                                      <MappingHeadTooltip
                                           title={
                                               <ChannelTooltip
                                                   {...{
@@ -802,14 +1080,12 @@ const OutputsHeadRow = ({
                                           PopperProps={popperPropsNearer}
                                       >
                                           <div>
-                                              {truncateValue(
-                                                  getCustomName(
-                                                      `outputs.${outputId}.channels.${channelIndex}`
-                                                  ) || channel.label
-                                              )}
+                                              {getCustomName(
+                                                  `outputs.${outputId}.channels.${channelIndex}`
+                                              ) || channel.label}
                                           </div>
-                                      </InteractiveTooltip>
-                                  </MappingHeadCell>
+                                      </MappingHeadTooltip>
+                                  </MappingColumnHeadCell>
                               )
                           )
                         : null
@@ -820,6 +1096,7 @@ const OutputsHeadRow = ({
 };
 
 const InputsRows = ({
+    cellTip,
     inputs,
     outputs,
     isOutputExpanded,
@@ -828,18 +1105,20 @@ const InputsRows = ({
     isShow,
     handleMap,
     isMapped,
-    truncateValue,
+    getConstraintWarning,
+    showAssociations,
 }) => {
     const { getCustomName } = useCustomNamesContext();
     return inputs.map(([inputId, inputItem]) => (
         <Fragment key={inputId}>
             <TableRow>
-                <InputParentAssociation
-                    isInputExpanded={isInputExpanded(inputId)}
-                    inputItem={inputItem}
-                    truncateValue={truncateValue}
-                />
-                <MappingHeadCell
+                {showAssociations && (
+                    <InputParentAssociation
+                        isInputExpanded={isInputExpanded(inputId)}
+                        inputItem={inputItem}
+                    />
+                )}
+                <MappingIOHeadCell
                     rowSpan={
                         isInputExpanded(inputId)
                             ? Object.keys(inputItem.channels).length
@@ -847,37 +1126,37 @@ const InputsRows = ({
                     }
                     colSpan={isInputExpanded(inputId) ? 1 : 2}
                 >
-                    <InteractiveTooltip
-                        title={
-                            <InputTooltip
-                                {...{
-                                    inputId,
-                                    inputItem,
-                                }}
-                            />
-                        }
-                        placement="left"
-                        arrow
-                        PopperProps={popperPropsNearer}
-                    >
-                        <div>
-                            {truncateValue(
-                                getCustomName(`inputs.${inputId}.name`) ||
-                                    inputItem.properties.name
-                            )}
-                        </div>
-                    </InteractiveTooltip>
-                    <CollapseButton
-                        onClick={() => onExpandInput(inputId)}
-                        isExpanded={isInputExpanded(inputId)}
-                        title={
-                            isInputExpanded(inputId)
-                                ? 'Hide channels'
-                                : 'View channels'
-                        }
-                        direction="horizontal"
-                    />
-                </MappingHeadCell>
+                    <div>
+                        <MappingHeadTooltip
+                            title={
+                                <InputTooltip
+                                    {...{
+                                        inputId,
+                                        inputItem,
+                                    }}
+                                />
+                            }
+                            placement="left"
+                            arrow
+                            PopperProps={popperPropsNearer}
+                        >
+                            <div>
+                                {getCustomName(`inputs.${inputId}.name`) ||
+                                    inputItem.properties.name}
+                            </div>
+                        </MappingHeadTooltip>
+                        <CollapseButton
+                            onClick={() => onExpandInput(inputId)}
+                            isExpanded={isInputExpanded(inputId)}
+                            title={
+                                isInputExpanded(inputId)
+                                    ? 'Hide channels'
+                                    : 'View channels'
+                            }
+                            direction="horizontal"
+                        />
+                    </div>
+                </MappingIOHeadCell>
                 {!isInputExpanded(inputId) ? (
                     <MappingCellsForCollapsedInput
                         outputs={outputs}
@@ -885,6 +1164,7 @@ const InputsRows = ({
                     />
                 ) : Object.keys(inputItem.channels).length >= 1 ? (
                     <InputChannelMappingCells
+                        cellTip={cellTip}
                         inputChannel={Object.values(inputItem.channels)[0]}
                         inputChannelIndex={Object.keys(inputItem.channels)[0]}
                         inputName={inputItem.properties.name}
@@ -894,7 +1174,7 @@ const InputsRows = ({
                         mappingDisabled={isShow}
                         handleMap={handleMap}
                         isMapped={isMapped}
-                        truncateValue={truncateValue}
+                        getConstraintWarning={getConstraintWarning}
                     />
                 ) : null}
             </TableRow>
@@ -905,6 +1185,7 @@ const InputsRows = ({
                     .map(([inputChannelIndex, inputChannel]) => (
                         <TableRow key={inputChannelIndex}>
                             <InputChannelMappingCells
+                                cellTip={cellTip}
                                 inputChannel={inputChannel}
                                 inputChannelIndex={inputChannelIndex}
                                 inputName={inputItem.properties.name}
@@ -914,7 +1195,422 @@ const InputsRows = ({
                                 mappingDisabled={isShow}
                                 handleMap={handleMap}
                                 isMapped={isMapped}
-                                truncateValue={truncateValue}
+                                getConstraintWarning={getConstraintWarning}
+                            />
+                        </TableRow>
+                    ))}
+        </Fragment>
+    ));
+};
+
+const InputParentHeadCells = ({ inputs, isInputExpanded }) =>
+    inputs.map(([inputId, inputItem]) => (
+        <MappingParentColumnHeadCell
+            colSpan={
+                isInputExpanded(inputId)
+                    ? Object.keys(inputItem.channels).length
+                    : 1
+            }
+            key={inputId}
+        >
+            {inputItem.parent.type === null ? (
+                <MappingHeadTooltip
+                    title={
+                        <Typography variant="body2">{'No Parent'}</Typography>
+                    }
+                    placement="top"
+                    arrow
+                    PopperProps={popperPropsNearer}
+                >
+                    <div>{'No Parent'}</div>
+                </MappingHeadTooltip>
+            ) : (
+                <MappingHeadTooltip
+                    title={<InputParentTooltip inputItem={inputItem} />}
+                    placement="top"
+                    arrow
+                    PopperProps={popperPropsNearer}
+                >
+                    <div>
+                        <InputParentReferenceField
+                            record={inputItem}
+                            link="show"
+                        >
+                            <VerticalLinkChipField />
+                        </InputParentReferenceField>
+                    </div>
+                </MappingHeadTooltip>
+            )}
+        </MappingParentColumnHeadCell>
+    ));
+
+const InputsHeadRows = ({
+    cornerCells,
+    inputs,
+    isInputExpanded,
+    onExpandInput,
+}) => {
+    const { getCustomName } = useCustomNamesContext();
+    return (
+        <>
+            <TableRow>
+                {cornerCells}
+                {inputs.map(([inputId, inputItem]) => (
+                    <MappingIOColumnHeadCell
+                        colSpan={
+                            isInputExpanded(inputId)
+                                ? Object.keys(inputItem.channels).length
+                                : 1
+                        }
+                        rowSpan={isInputExpanded(inputId) ? 1 : 2}
+                        key={inputId}
+                    >
+                        <MappingHeadTooltip
+                            title={<InputTooltip {...{ inputId, inputItem }} />}
+                            placement="top"
+                            arrow
+                            PopperProps={popperPropsNearer}
+                        >
+                            <div>
+                                {getCustomName(`inputs.${inputId}.name`) ||
+                                    inputItem.properties.name}
+                            </div>
+                        </MappingHeadTooltip>
+                        <CollapseButton
+                            onClick={() => onExpandInput(inputId)}
+                            isExpanded={isInputExpanded(inputId)}
+                            title={
+                                isInputExpanded(inputId)
+                                    ? 'Hide channels'
+                                    : 'View channels'
+                            }
+                        />
+                    </MappingIOColumnHeadCell>
+                ))}
+            </TableRow>
+            <TableRow>
+                {inputs.map(([inputId, inputItem]) =>
+                    isInputExpanded(inputId)
+                        ? Object.entries(inputItem.channels).map(
+                              ([channelIndex, channel]) => (
+                                  <MappingColumnHeadCell key={channelIndex}>
+                                      <MappingHeadTooltip
+                                          title={
+                                              <ChannelTooltip
+                                                  {...{
+                                                      ioResource: 'inputs',
+                                                      id: inputId,
+                                                      channelIndex,
+                                                      channelLabel:
+                                                          channel.label,
+                                                  }}
+                                              />
+                                          }
+                                          placement="top"
+                                          arrow
+                                          PopperProps={popperPropsNearer}
+                                      >
+                                          <div>
+                                              {getCustomName(
+                                                  `inputs.${inputId}.channels.${channelIndex}`
+                                              ) || channel.label}
+                                          </div>
+                                      </MappingHeadTooltip>
+                                  </MappingColumnHeadCell>
+                              )
+                          )
+                        : null
+                )}
+            </TableRow>
+        </>
+    );
+};
+
+const OutputSourceAssociationCell = ({ isOutputExpanded, outputItem }) => (
+    <MappingParentHeadCell
+        rowSpan={isOutputExpanded ? Object.keys(outputItem.channels).length : 1}
+    >
+        {get(outputItem, 'source_id') ? (
+            <MappingHeadTooltip
+                title={<OutputSourceTooltip {...{ outputItem }} />}
+                placement="left"
+                arrow
+                PopperProps={popperPropsNearer}
+            >
+                <div>
+                    <ReferenceField
+                        record={outputItem}
+                        basePath="/sources"
+                        label="Source"
+                        source="source_id"
+                        reference="sources"
+                        link="show"
+                    >
+                        <HorizontalLinkChipField />
+                    </ReferenceField>
+                </div>
+            </MappingHeadTooltip>
+        ) : (
+            <MappingHeadTooltip
+                title={<Typography variant="body2">{'No Source'}</Typography>}
+                placement="left"
+                arrow
+                PopperProps={popperPropsNearer}
+            >
+                <div>{'No Source'}</div>
+            </MappingHeadTooltip>
+        )}
+    </MappingParentHeadCell>
+);
+
+const MappingCellsForCollapsedOutput = ({ inputs, isInputExpanded }) => (
+    <>
+        <MatrixCell>
+            <VerticalEllipsisButton disabled />
+        </MatrixCell>
+        {inputs.map(([inputId, inputItem]) =>
+            isInputExpanded(inputId) ? (
+                Object.keys(inputItem.channels).map(channelIndex => (
+                    <MatrixCell key={channelIndex}>
+                        <VerticalEllipsisButton disabled />
+                    </MatrixCell>
+                ))
+            ) : (
+                <MatrixCell key={inputId}>
+                    <DiagonalEllipsisButton disabled />
+                </MatrixCell>
+            )
+        )}
+    </>
+);
+
+const OutputChannelMappingCells = ({
+    cellTip,
+    outputChannel,
+    outputChannelIndex,
+    outputId,
+    outputItem,
+    inputs,
+    isInputExpanded,
+    mappingDisabled,
+    handleMap,
+    isMapped,
+    getConstraintWarning,
+}) => (
+    <>
+        <ChannelMappingCell
+            {...{
+                cellTip,
+                outputId,
+                outputItem,
+                outputChannelIndex,
+                outputChannel,
+                mappingDisabled,
+                handleMap,
+                isMapped,
+                getConstraintWarning,
+            }}
+            inputId={null}
+            inputName="Unrouted"
+            inputChannelIndex={null}
+        />
+        {inputs.map(([inputId, inputItem]) =>
+            isInputExpanded(inputId) ? (
+                Object.entries(inputItem.channels).map(
+                    ([inputChannelIndex, inputChannel]) => (
+                        <ChannelMappingCell
+                            key={inputChannelIndex}
+                            {...{
+                                cellTip,
+                                outputId,
+                                outputItem,
+                                outputChannelIndex,
+                                outputChannel,
+                                inputId,
+                                inputChannelIndex,
+                                inputChannel,
+                                mappingDisabled,
+                                handleMap,
+                                isMapped,
+                                getConstraintWarning,
+                            }}
+                            inputName={inputItem.properties.name}
+                        />
+                    )
+                )
+            ) : (
+                <MatrixCell key={inputId}>
+                    <HorizontalEllipsisButton disabled />
+                </MatrixCell>
+            )
+        )}
+    </>
+);
+
+const OutputsRows = ({
+    cellTip,
+    outputs,
+    inputs,
+    getInputAPIName,
+    isOutputExpanded,
+    isInputExpanded,
+    onExpandOutput,
+    mappingDisabled,
+    handleMap,
+    isMapped,
+    getConstraintWarning,
+    showAssociations,
+}) => {
+    const { getCustomName } = useCustomNamesContext();
+    return outputs.map(([outputId, outputItem]) => (
+        <Fragment key={outputId}>
+            <TableRow>
+                {showAssociations && (
+                    <OutputSourceAssociationCell
+                        isOutputExpanded={isOutputExpanded(outputId)}
+                        outputItem={outputItem}
+                    />
+                )}
+                <MappingIOHeadCell
+                    rowSpan={
+                        isOutputExpanded(outputId)
+                            ? Object.keys(outputItem.channels).length
+                            : 1
+                    }
+                    colSpan={isOutputExpanded(outputId) ? 1 : 2}
+                >
+                    <div>
+                        <MappingHeadTooltip
+                            title={
+                                <OutputTooltip
+                                    {...{
+                                        outputId,
+                                        outputItem,
+                                        getInputAPIName,
+                                    }}
+                                />
+                            }
+                            placement="left"
+                            arrow
+                            PopperProps={popperPropsNearer}
+                        >
+                            <div>
+                                {getCustomName(`outputs.${outputId}.name`) ||
+                                    outputItem.properties.name}
+                            </div>
+                        </MappingHeadTooltip>
+                        <CollapseButton
+                            onClick={() => onExpandOutput(outputId)}
+                            isExpanded={isOutputExpanded(outputId)}
+                            title={
+                                isOutputExpanded(outputId)
+                                    ? 'Hide channels'
+                                    : 'View channels'
+                            }
+                            direction="horizontal"
+                        />
+                    </div>
+                </MappingIOHeadCell>
+                {!isOutputExpanded(outputId) ? (
+                    <MappingCellsForCollapsedOutput
+                        inputs={inputs}
+                        isInputExpanded={isInputExpanded}
+                    />
+                ) : Object.keys(outputItem.channels).length >= 1 ? (
+                    <>
+                        <MappingChannelHeadCell>
+                            <MappingHeadTooltip
+                                title={
+                                    <ChannelTooltip
+                                        ioResource="outputs"
+                                        id={outputId}
+                                        channelIndex={
+                                            Object.keys(outputItem.channels)[0]
+                                        }
+                                        channelLabel={
+                                            Object.values(
+                                                outputItem.channels
+                                            )[0].label
+                                        }
+                                    />
+                                }
+                                placement="left"
+                                arrow
+                                PopperProps={popperPropsNearer}
+                            >
+                                <div>
+                                    {getCustomName(
+                                        `outputs.${outputId}.channels.${
+                                            Object.keys(outputItem.channels)[0]
+                                        }`
+                                    ) ||
+                                        Object.values(outputItem.channels)[0]
+                                            .label}
+                                </div>
+                            </MappingHeadTooltip>
+                        </MappingChannelHeadCell>
+                        <OutputChannelMappingCells
+                            cellTip={cellTip}
+                            outputChannel={
+                                Object.values(outputItem.channels)[0]
+                            }
+                            outputChannelIndex={
+                                Object.keys(outputItem.channels)[0]
+                            }
+                            {...{
+                                outputId,
+                                outputItem,
+                                inputs,
+                                isInputExpanded,
+                                mappingDisabled,
+                                handleMap,
+                                isMapped,
+                                getConstraintWarning,
+                            }}
+                        />
+                    </>
+                ) : null}
+            </TableRow>
+            {isOutputExpanded(outputId) &&
+                Object.entries(outputItem.channels)
+                    .slice(1)
+                    .map(([outputChannelIndex, outputChannel]) => (
+                        <TableRow key={outputChannelIndex}>
+                            <MappingChannelHeadCell>
+                                <MappingHeadTooltip
+                                    title={
+                                        <ChannelTooltip
+                                            ioResource="outputs"
+                                            id={outputId}
+                                            channelIndex={outputChannelIndex}
+                                            channelLabel={outputChannel.label}
+                                        />
+                                    }
+                                    placement="left"
+                                    arrow
+                                    PopperProps={popperPropsNearer}
+                                >
+                                    <div>
+                                        {getCustomName(
+                                            `outputs.${outputId}.channels.${outputChannelIndex}`
+                                        ) || outputChannel.label}
+                                    </div>
+                                </MappingHeadTooltip>
+                            </MappingChannelHeadCell>
+                            <OutputChannelMappingCells
+                                {...{
+                                    cellTip,
+                                    outputChannel,
+                                    outputChannelIndex,
+                                    outputId,
+                                    outputItem,
+                                    inputs,
+                                    isInputExpanded,
+                                    mappingDisabled,
+                                    handleMap,
+                                    isMapped,
+                                    getConstraintWarning,
+                                }}
                             />
                         </TableRow>
                     ))}
@@ -930,16 +1626,52 @@ const sortedByIOName = (ioEntries, getCustomName) => {
     });
 };
 
+export const getRenderedIOColumns = (ioResource, ioEntries, isExpanded) =>
+    ioEntries.flatMap(([id, item]) =>
+        isExpanded(ioResource, id)
+            ? Object.keys(item.channels).map(
+                  channelIndex => `${id}.${channelIndex}`
+              )
+            : [id]
+    );
+
+export const getMappingTableColumns = (
+    inputs,
+    outputs,
+    isExpanded,
+    swapAxes
+) =>
+    swapAxes
+        ? ['unrouted', ...getRenderedIOColumns('inputs', inputs, isExpanded)]
+        : getRenderedIOColumns('outputs', outputs, isExpanded);
+
+export const channelMappingCornerLabels = swapAxes =>
+    swapAxes
+        ? { rows: 'OUTPUTS', columns: 'INPUTS' }
+        : { rows: 'INPUTS', columns: 'OUTPUTS' };
+
+export const showMappingAssociations = settings =>
+    get(settings, 'parent/source headings') !== false;
+
 const ChannelMappingMatrix = ({ record, isShow, mapping, handleMap }) => {
+    const deviceId = get(record, 'id');
+
+    // Input and Output ids are only unique within a Device, so remember
+    // which Device the expansion is for and start the next one collapsed
     const [expanded, setExpanded] = useJSONSetting('Channel Mapping Expanded', {
+        device: deviceId,
         inputs: [],
         outputs: [],
     });
     const isExpanded = (ioResource, id) =>
+        get(expanded, 'device') === deviceId &&
         get(expanded, ioResource).includes(id);
     const toggleExpanded = (ioResource, id) => {
         setExpanded(expanded => {
-            let newExpanded = { ...expanded };
+            let newExpanded =
+                get(expanded, 'device') === deviceId
+                    ? { ...expanded }
+                    : { device: deviceId, inputs: [], outputs: [] };
             const expandedIoResource = get(newExpanded, ioResource);
             const isExpanded = expandedIoResource.includes(id);
             const newExpandedIoResource = isExpanded
@@ -971,14 +1703,13 @@ const ChannelMappingMatrix = ({ record, isShow, mapping, handleMap }) => {
     };
 
     const [tooltipModal, setTooltipModal] = useState(false);
+    const cellTip = useRef(null);
 
     const [outputsFilter, setOutputsFilter] = useJSONSetting('Outputs Filter');
     const [inputsFilter, setInputsFilter] = useJSONSetting('Inputs Filter');
     const [settingsFilter, setSettingsFilter] = useJSONSetting(
         'Channel Mapping Settings'
     );
-
-    const deviceId = get(record, 'id');
 
     const [customNames, setCustomNames] = useJSONSetting(
         'Channel Mapping Custom Names'
@@ -1010,10 +1741,24 @@ const ChannelMappingMatrix = ({ record, isShow, mapping, handleMap }) => {
             return newCustomNames;
         });
 
-    const maxLength = get(settingsFilter, 'label length');
-    const truncateValue = value => truncateValueAtLength(value, maxLength);
-
     const io = convertChannelsArraysToObjects(get(record, '$io'));
+    const constraintWarnings = channelMappingConstraintWarnings(io, mapping);
+    const getConstraintWarning = (
+        inputId,
+        outputId,
+        inputChannelIndex,
+        outputChannelIndex,
+        outputItem
+    ) => {
+        return isMapped(
+            inputId,
+            outputId,
+            inputChannelIndex,
+            outputChannelIndex
+        )
+            ? get(constraintWarnings, [outputId, outputChannelIndex])
+            : routableInputConstraintWarning(outputItem, inputId);
+    };
 
     const getInputAPIName = inputId =>
         get(io, `inputs.${inputId}.properties.name`);
@@ -1031,6 +1776,9 @@ const ChannelMappingMatrix = ({ record, isShow, mapping, handleMap }) => {
     );
 
     const sorted = get(settingsFilter, 'auto sort');
+    const swapAxes = get(settingsFilter, 'swap axes') || false;
+    const showAssociations = showMappingAssociations(settingsFilter);
+    const headingSections = showAssociations ? 3 : 2;
 
     const renderedOutputs =
         sorted === undefined || sorted
@@ -1045,6 +1793,36 @@ const ChannelMappingMatrix = ({ record, isShow, mapping, handleMap }) => {
               )
             : filteredInputs;
 
+    const mappingColumns = getMappingTableColumns(
+        renderedInputs,
+        renderedOutputs,
+        isExpanded,
+        swapAxes
+    );
+    const mappingTableWidth =
+        headingSections * HEADING_EXTENT + mappingColumns.length * CELL_EXTENT;
+    const mappingTableRef = useRef(null);
+    const mappingTableMaxHeight = useTableMaxHeight(mappingTableRef);
+    const cornerLabels = channelMappingCornerLabels(swapAxes);
+
+    // the corner spans every heading section each way, so it belongs to the
+    // first heading row there is, whether or not that is the association row
+    const cornerCell = (
+        <MappingCornerCell
+            rowSpan={headingSections}
+            colSpan={headingSections}
+            style={{ height: headingSections * HEADING_EXTENT }}
+        >
+            <span style={cornerRowsLabelStyle}>{cornerLabels.rows}</span>
+            <span style={cornerColumnsLabelStyle}>{cornerLabels.columns}</span>
+        </MappingCornerCell>
+    );
+    const unroutedColumnCell = (
+        <MappingColumnHeadCell rowSpan={headingSections}>
+            <div>{'Unrouted'}</div>
+        </MappingColumnHeadCell>
+    );
+
     return (
         <CustomNamesContextProvider
             value={{ getCustomName, setCustomName, unsetCustomName }}
@@ -1052,17 +1830,20 @@ const ChannelMappingMatrix = ({ record, isShow, mapping, handleMap }) => {
             <FilterPanel
                 filter={outputsFilter}
                 setFilter={setOutputsFilter}
-                filterButtonLabel={'Add output filter'}
+                filterButtonLabel={'Output filters'}
+                noFilters
             >
                 <StringFilter source="output id" />
                 <StringFilter source="output name" />
                 <StringFilter source="output channel label" />
                 <StringFilter source="routable inputs" />
             </FilterPanel>
+            <Divider light style={{ margin: '8px 0' }} />
             <FilterPanel
                 filter={inputsFilter}
                 setFilter={setInputsFilter}
-                filterButtonLabel={'Add input filter'}
+                filterButtonLabel={'Input filters'}
+                noFilters
             >
                 <StringFilter source="input id" />
                 <StringFilter source="input name" />
@@ -1077,71 +1858,185 @@ const ChannelMappingMatrix = ({ record, isShow, mapping, handleMap }) => {
                 />
                 <BooleanFilter source="reordering" />
             </FilterPanel>
+            <Divider light style={{ margin: '8px 0' }} />
             <FilterPanel
                 filter={settingsFilter}
                 setFilter={setSettingsFilter}
                 filterButtonLabel={'settings'}
                 allFilters={false}
             >
-                <NumberFilter
-                    source="label length"
-                    InputProps={{
-                        inputProps: {
-                            min: 1,
-                        },
-                    }}
-                />
                 <BooleanFilter source="auto sort" />
+                <BooleanFilter source="swap axes" />
+                <BooleanFilter
+                    source="parent/source headings"
+                    label="Parent/Source Headings"
+                />
                 <Divider />
                 <MenuItem onClick={unsetCustomNames}>
                     Clear Custom Names
                 </MenuItem>
             </FilterPanel>
-            <InteractiveTooltipContext.Provider
+            <MappingHeadTooltipContext.Provider
                 value={{ tooltipModal, setTooltipModal }}
             >
-                <Table>
-                    <TableHead>
-                        <TableRow>
-                            <MappingCornerCell rowSpan={3} colSpan={3}>
-                                {'INPUTS \\ OUTPUTS'}
-                            </MappingCornerCell>
-                            <OutputSourceAssociation
-                                outputs={renderedOutputs}
-                                isExpanded={id => isExpanded('outputs', id)}
-                                truncateValue={truncateValue}
-                            />
-                        </TableRow>
-                        <OutputsHeadRow
-                            outputs={renderedOutputs}
-                            getInputAPIName={getInputAPIName}
-                            isOutputExpanded={id => isExpanded('outputs', id)}
-                            onExpandOutput={id => toggleExpanded('outputs', id)}
-                            truncateValue={truncateValue}
-                        />
-                    </TableHead>
-                    <TableBody>
-                        <UnroutedRow
-                            outputs={renderedOutputs}
-                            mappingDisabled={isShow}
-                            handleMap={handleMap}
-                            isMapped={isMapped}
-                            isOutputExpanded={id => isExpanded('outputs', id)}
-                        />
-                        <InputsRows
-                            inputs={renderedInputs}
-                            outputs={renderedOutputs}
-                            isOutputExpanded={id => isExpanded('outputs', id)}
-                            isInputExpanded={id => isExpanded('inputs', id)}
-                            onExpandInput={id => toggleExpanded('inputs', id)}
-                            isShow={isShow}
-                            handleMap={handleMap}
-                            isMapped={isMapped}
-                            truncateValue={truncateValue}
-                        />
-                    </TableBody>
-                </Table>
-            </InteractiveTooltipContext.Provider>
+                <MatrixTableContainer
+                    ref={mappingTableRef}
+                    style={{ maxHeight: mappingTableMaxHeight }}
+                >
+                    <Table
+                        style={{
+                            [PARENT_HEADING_OFFSET]: showAssociations
+                                ? `${HEADING_EXTENT}px`
+                                : '0px',
+                            [IO_HEADING_EDGE]: showAssociations
+                                ? '0'
+                                : `${CELL_BORDER}px`,
+                            ...matrixTableStyle(mappingTableWidth),
+                        }}
+                    >
+                        <colgroup>
+                            {showAssociations && (
+                                <col style={{ width: HEADING_EXTENT }} />
+                            )}
+                            <col style={{ width: HEADING_EXTENT }} />
+                            <col style={{ width: HEADING_EXTENT }} />
+                            {mappingColumns.map(key => (
+                                <col key={key} style={{ width: CELL_EXTENT }} />
+                            ))}
+                        </colgroup>
+                        {swapAxes ? (
+                            <>
+                                <MatrixTableHead>
+                                    {showAssociations && (
+                                        <TableRow>
+                                            {cornerCell}
+                                            {unroutedColumnCell}
+                                            <InputParentHeadCells
+                                                inputs={renderedInputs}
+                                                isInputExpanded={id =>
+                                                    isExpanded('inputs', id)
+                                                }
+                                            />
+                                        </TableRow>
+                                    )}
+                                    <InputsHeadRows
+                                        cornerCells={
+                                            !showAssociations && (
+                                                <>
+                                                    {cornerCell}
+                                                    {unroutedColumnCell}
+                                                </>
+                                            )
+                                        }
+                                        inputs={renderedInputs}
+                                        isInputExpanded={id =>
+                                            isExpanded('inputs', id)
+                                        }
+                                        onExpandInput={id =>
+                                            toggleExpanded('inputs', id)
+                                        }
+                                    />
+                                </MatrixTableHead>
+                                <TableBody>
+                                    <OutputsRows
+                                        cellTip={cellTip}
+                                        outputs={renderedOutputs}
+                                        inputs={renderedInputs}
+                                        getInputAPIName={getInputAPIName}
+                                        isOutputExpanded={id =>
+                                            isExpanded('outputs', id)
+                                        }
+                                        isInputExpanded={id =>
+                                            isExpanded('inputs', id)
+                                        }
+                                        onExpandOutput={id =>
+                                            toggleExpanded('outputs', id)
+                                        }
+                                        mappingDisabled={isShow}
+                                        handleMap={handleMap}
+                                        isMapped={isMapped}
+                                        getConstraintWarning={
+                                            getConstraintWarning
+                                        }
+                                        showAssociations={showAssociations}
+                                    />
+                                </TableBody>
+                            </>
+                        ) : (
+                            <>
+                                <MatrixTableHead>
+                                    {showAssociations && (
+                                        <TableRow>
+                                            {cornerCell}
+                                            <OutputSourceAssociation
+                                                outputs={renderedOutputs}
+                                                isExpanded={id =>
+                                                    isExpanded('outputs', id)
+                                                }
+                                            />
+                                        </TableRow>
+                                    )}
+                                    <OutputsHeadRow
+                                        cornerCells={
+                                            !showAssociations && cornerCell
+                                        }
+                                        outputs={renderedOutputs}
+                                        getInputAPIName={getInputAPIName}
+                                        isOutputExpanded={id =>
+                                            isExpanded('outputs', id)
+                                        }
+                                        onExpandOutput={id =>
+                                            toggleExpanded('outputs', id)
+                                        }
+                                    />
+                                </MatrixTableHead>
+                                <TableBody>
+                                    <UnroutedRow
+                                        cellTip={cellTip}
+                                        outputs={renderedOutputs}
+                                        headingSections={headingSections}
+                                        mappingDisabled={isShow}
+                                        handleMap={handleMap}
+                                        isMapped={isMapped}
+                                        getConstraintWarning={
+                                            getConstraintWarning
+                                        }
+                                        isOutputExpanded={id =>
+                                            isExpanded('outputs', id)
+                                        }
+                                    />
+                                    <InputsRows
+                                        cellTip={cellTip}
+                                        inputs={renderedInputs}
+                                        outputs={renderedOutputs}
+                                        isOutputExpanded={id =>
+                                            isExpanded('outputs', id)
+                                        }
+                                        isInputExpanded={id =>
+                                            isExpanded('inputs', id)
+                                        }
+                                        onExpandInput={id =>
+                                            toggleExpanded('inputs', id)
+                                        }
+                                        isShow={isShow}
+                                        handleMap={handleMap}
+                                        isMapped={isMapped}
+                                        getConstraintWarning={
+                                            getConstraintWarning
+                                        }
+                                        showAssociations={showAssociations}
+                                    />
+                                </TableBody>
+                            </>
+                        )}
+                    </Table>
+                </MatrixTableContainer>
+                {
+                    // a heading being edited must not be covered by a cell
+                    // tooltip the pointer passes over on its way there
+                }
+                <MatrixCellTip disabled={tooltipModal} ref={cellTip} />
+            </MappingHeadTooltipContext.Provider>
         </CustomNamesContextProvider>
     );
 };

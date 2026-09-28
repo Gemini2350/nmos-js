@@ -16,13 +16,22 @@ import {
 import { get, has } from 'lodash';
 import copy from 'clipboard-copy';
 import { useTheme } from '@material-ui/styles';
+import emphasizedPaper from '../../theme/emphasizedPaper';
+import ActiveField from '../../components/ActiveField';
 import LinkChipField from '../../components/LinkChipField';
 import ConnectionShowActions from '../../components/ConnectionShowActions';
+import HintedTab from '../../components/HintedTab';
+import {
+    CONNECTION_API_NOT_AVAILABLE,
+    transportFileHint,
+} from '../../components/controlApiMessages';
 import ItemArrayField from '../../components/ItemArrayField';
-import ObjectField from '../../components/ObjectField';
+import AnnotationFields, {
+    AnnotationTagsField,
+    AnnotationTextField,
+} from '../../components/AnnotationFields';
 import {
     ParameterField,
-    TAGS,
     TRANSPORTS,
 } from '../../components/ParameterRegisters';
 import ResourceTitle from '../../components/ResourceTitle';
@@ -56,11 +65,22 @@ const SendersShowView = props => {
         }
     }, [record]);
 
+    const disabledHint = key => {
+        if (get(record, '$connectionAPI') === null) {
+            return CONNECTION_API_NOT_AVAILABLE;
+        }
+        if (
+            key === 'transportfile' &&
+            useConnectionAPI &&
+            !get(record, '$transportfile')
+        ) {
+            return transportFileHint(get(record, 'transport'));
+        }
+        return '';
+    };
+
     const theme = useTheme();
-    const tabBackgroundColor =
-        theme.palette.type === 'light'
-            ? theme.palette.grey[100]
-            : theme.palette.grey[900];
+    const tabBackgroundColor = emphasizedPaper(theme);
     return (
         <>
             <div style={{ display: 'flex' }}>
@@ -82,8 +102,9 @@ const SendersShowView = props => {
                             to={`${props.basePath}/${props.id}/show/`}
                         />
                         {['active', 'staged', 'transportfile'].map(key => (
-                            <Tab
+                            <HintedTab
                                 key={key}
+                                hint={disabledHint(key)}
                                 label={labelize(key)}
                                 value={`${props.match.url}/${key}`}
                                 component={Link}
@@ -123,9 +144,11 @@ const ShowSummaryTab = ({ record, ...props }) => {
             <SimpleShowLayout>
                 <TextField label="ID" source="id" name="id" />
                 <TAIField source="version" />
-                <TextField source="label" name="label" />
-                <TextField source="description" name="description" />
-                <ObjectField register={TAGS} source="tags" />
+                <AnnotationFields>
+                    <AnnotationTextField source="label" />
+                    <AnnotationTextField source="description" />
+                    <AnnotationTagsField />
+                </AnnotationFields>
                 <SanitizedDivider />
                 <ParameterField source="transport" register={TRANSPORTS} />
                 <UrlField
@@ -140,7 +163,11 @@ const ShowSummaryTab = ({ record, ...props }) => {
                     />
                 )}
                 {queryVersion() >= 'v1.2' && (
-                    <BooleanField label="Active" source="subscription.active" />
+                    <ActiveField
+                        label="Active"
+                        record={record}
+                        resource="senders"
+                    />
                 )}
                 {
                     // BCP-006-01 NMOS With JPEG XS requires some additional Sender attributes
