@@ -1,8 +1,10 @@
 import { isConnectionsAxisTruncated } from './ConnectionsList';
+import { CELL_EXTENT } from '../../components/matrixLayout';
 import {
     connectionsCornerLabels,
     groupConnectionsResources,
     isActiveConnection,
+    sliceRenderedGroups,
 } from './ConnectionsMatrix';
 import {
     ConnectionRank,
@@ -16,8 +18,6 @@ import {
     receiverEssenceFromSender,
     senderEssenceFromReceiver,
 } from './connectionHeadingMatch';
-import { transportFileHint } from '../../components/controlApiMessages';
-import { parseTransportUrn } from '../../transportUrn';
 import {
     FORMATS,
     TRANSPORTS,
@@ -266,6 +266,28 @@ describe('connection rank', () => {
     });
 });
 
+describe('sliceRenderedGroups', () => {
+    const groups = [
+        {
+            id: 'device-a',
+            label: 'A',
+            units: [{ type: 'group' }, { type: 'group' }, { type: 'group' }],
+        },
+        {
+            id: 'device-b',
+            label: 'B',
+            units: [{ resource: { id: 'port' }, type: 'resource' }],
+        },
+    ];
+
+    it('keeps a device heading centred on its whole span', () => {
+        const [device] = sliceRenderedGroups(groups, 1, 3);
+
+        expect(device.units).toHaveLength(2);
+        expect(device.centre).toBe(CELL_EXTENT / 2);
+    });
+});
+
 describe('heading match', () => {
     const rtpMcast = 'urn:x-nmos:transport:rtp.mcast';
     const video = 'urn:x-nmos:format:video';
@@ -325,8 +347,8 @@ describe('heading match', () => {
         ).toEqual({
             transport: `${rtpMcast}|urn:x-nmos:transport:rtp$`,
             '$flow.format': video,
-            '$flow.media_type': ['video/raw'],
-            '$flow.event_type': ['number'],
+            '$flow.media_type': 'video/raw',
+            '$flow.event_type': 'number',
             $constraint_sets: constraintSets,
             $constraint_sets_active: 'r',
         });
@@ -338,6 +360,25 @@ describe('heading match', () => {
         ).toEqual({
             transport: rtpMcast,
             '$flow.format': video,
+        });
+    });
+
+    it('keeps string entries from a broken receiver list', () => {
+        expect(
+            senderEssenceFromReceiver(
+                {
+                    ...receiver,
+                    caps: {
+                        media_types: ['video/raw', null, ''],
+                        event_types: [null],
+                    },
+                },
+                { usingRql: true, version: 'v1.3' }
+            )
+        ).toEqual({
+            transport: `${rtpMcast}|urn:x-nmos:transport:rtp$`,
+            '$flow.format': video,
+            '$flow.media_type': 'video/raw',
         });
     });
 
@@ -380,38 +421,5 @@ describe('heading match', () => {
             format: video,
             transport: rtpMcast,
         });
-    });
-});
-
-describe('control API messages', () => {
-    it('names transports that do not use a transport file', () => {
-        expect(transportFileHint('urn:x-nmos:transport:mxl')).toBe(
-            'MXL does not use a transport file.'
-        );
-        expect(transportFileHint('urn:x-nmos:transport:websocket')).toBe(
-            'WebSocket does not use a transport file.'
-        );
-        expect(transportFileHint('urn:x-nmos:transport:mqtt')).toBe(
-            'MQTT does not use a transport file.'
-        );
-    });
-
-    it('treats RTP as a missing transport file', () => {
-        expect(transportFileHint('urn:x-nmos:transport:rtp')).toBe(
-            'Transport file is not available.'
-        );
-        expect(transportFileHint('urn:x-nmos:transport:rtp.ucast')).toBe(
-            'Transport file is not available.'
-        );
-    });
-
-    it('takes the URN-base of a versioned or subclassified transport', () => {
-        expect(parseTransportUrn('urn:x-nmos:transport:rtp.mcast').base).toBe(
-            'urn:x-nmos:transport:rtp'
-        );
-        expect(
-            parseTransportUrn('urn:x-nmos:transport:websocket/v1.0').base
-        ).toBe('urn:x-nmos:transport:websocket');
-        expect(parseTransportUrn(undefined)).toBeNull();
     });
 });

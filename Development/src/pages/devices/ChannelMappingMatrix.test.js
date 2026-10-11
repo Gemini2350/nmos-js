@@ -1,9 +1,22 @@
 import {
+    CELL_EXTENT,
+    CHIP_EXTENT,
+    CHIP_MARGIN,
+} from '../../components/matrixLayout';
+import { renderedSpanCentre } from '../../components/matrixViewport';
+import {
+    filterRoutableToOutput,
+    getFilteredInputs,
+    getFilteredOutputs,
+    routableInputsQuery,
+} from './FilterMatrix';
+import {
     channelMappingConstraintWarnings,
     channelMappingCornerLabels,
     getMappingTableColumns,
     isRoutableInput,
     showMappingAssociations,
+    sliceRenderedIO,
 } from './ChannelMappingMatrix';
 
 describe('matrix layout', () => {
@@ -48,6 +61,68 @@ describe('matrix layout', () => {
             showMappingAssociations({ 'parent/source headings': false })
         ).toBe(false);
     });
+
+    it('slices expanded channels without repeating a clipped heading', () => {
+        expect(sliceRenderedIO('inputs', inputs, isExpanded, 1, 3)).toEqual([
+            ['input0', { channels: { 1: {} } }, 0],
+            ['input1', { channels: [{}] }, CELL_EXTENT / 2],
+        ]);
+    });
+
+    it('keeps a heading centred on its whole span', () => {
+        const wide = [['wide', { channels: [{}, {}, {}, {}] }]];
+        const expanded = () => true;
+
+        expect(renderedSpanCentre(0, 4, 4)).toBe(2 * CELL_EXTENT);
+        expect(sliceRenderedIO('inputs', wide, expanded, 1, 3)[0][2]).toBe(
+            CELL_EXTENT
+        );
+        expect(sliceRenderedIO('inputs', wide, expanded, 3, 4)[0][2]).toBe(
+            null
+        );
+    });
+
+    it('pins a heading to the viewport edge when its centre is off screen', () => {
+        const contentExtent = CHIP_EXTENT + 2 * CHIP_MARGIN;
+        const onScreen = {
+            gridOrigin: 0,
+            offset: 0,
+            scrollVar: '--matrix-scroll-left',
+            sizeVar: '--matrix-view-width',
+            viewStart: 0,
+            viewEnd: 4 * CELL_EXTENT,
+        };
+        const half = contentExtent / 2;
+        const centre = 2 * CELL_EXTENT;
+
+        const leading = `max(0px, var(--matrix-scroll-left)) + ${half}px`;
+        const trailing = `min(${4 * CELL_EXTENT}px, var(--matrix-scroll-left) + var(--matrix-view-width)) - ${half}px`;
+
+        expect(renderedSpanCentre(0, 4, 4, onScreen)).toBe(
+            `calc(clamp(min(${leading}, ${trailing}), ${centre}px, max(${leading}, ${trailing})) - 0px)`
+        );
+        expect(
+            renderedSpanCentre(0, 4, 1, {
+                ...onScreen,
+                viewEnd: CELL_EXTENT,
+            })
+        ).toContain('var(--matrix-scroll-left)');
+        expect(
+            renderedSpanCentre(0, 4, 1, {
+                ...onScreen,
+                viewEnd: contentExtent - 1,
+            })
+        ).toBe(null);
+    });
+
+    it('keeps the original channel indexes when slicing', () => {
+        expect(
+            Object.keys(
+                sliceRenderedIO('outputs', outputs, isExpanded, 1, 3)[0][1]
+                    .channels
+            )
+        ).toEqual(['1', '2']);
+    });
 });
 
 describe('isRoutableInput', () => {
@@ -91,6 +166,131 @@ describe('isRoutableInput', () => {
         expect(
             isRoutableInput({ caps: { routable_inputs: 'input0' } }, 'input1')
         ).toBe(true);
+    });
+});
+
+describe('routable heading filters', () => {
+    const input = channels => ({
+        properties: { name: 'Mic' },
+        channels,
+        caps: {},
+    });
+    const inputs = {
+        'in-1': input({ 0: { label: 'a' } }),
+        'in-10': input({ 0: { label: 'b' } }),
+    };
+    const outputs = {
+        listed: {
+            properties: { name: 'Out' },
+            channels: { 0: { label: 'c' } },
+            caps: { routable_inputs: ['in-1'] },
+        },
+        other: {
+            properties: { name: 'Other' },
+            channels: { 0: { label: 'd' } },
+            caps: { routable_inputs: ['in-10'] },
+        },
+        open: {
+            properties: { name: 'Open' },
+            channels: { 0: { label: 'e' } },
+            caps: { routable_inputs: null },
+        },
+    };
+    const names = () => '';
+
+    it('matches an input id without matching a longer id', () => {
+        const filtered = getFilteredOutputs(
+            { 'routable inputs': routableInputsQuery('in-1') },
+            outputs,
+            () => 'Mic',
+            names
+        );
+
+        expect(Object.keys(filtered)).toEqual(['listed', 'open']);
+    });
+
+    it('matches nothing when the routable-inputs pattern is invalid', () => {
+        const pattern = '^?:in-1|No Constraints)$';
+        expect(() =>
+            getFilteredOutputs(
+                { 'routable inputs': pattern },
+                outputs,
+                () => 'Mic',
+                names
+            )
+        ).not.toThrow();
+        expect(
+            Object.keys(
+                getFilteredOutputs(
+                    { 'routable inputs': pattern },
+                    outputs,
+                    () => 'Mic',
+                    names
+                )
+            )
+        ).toEqual([]);
+    });
+
+    it('matches Unrouted and outputs with no constraints', () => {
+        const filtered = getFilteredOutputs(
+            { 'routable inputs': routableInputsQuery('Unrouted') },
+            {
+                ...outputs,
+                clearable: {
+                    properties: { name: 'Clear' },
+                    channels: { 0: { label: 'f' } },
+                    caps: { routable_inputs: ['in-1', null] },
+                },
+            },
+            () => 'Mic',
+            names
+        );
+
+        expect(Object.keys(filtered)).toEqual(['open', 'clearable']);
+    });
+
+    it('keeps every input that can route to the output', () => {
+        expect(
+            Object.keys(
+                getFilteredInputs(
+                    { 'routable to output': 'listed' },
+                    inputs,
+                    names,
+                    outputs
+                )
+            )
+        ).toEqual(['in-1']);
+        expect(
+            Object.keys(
+                getFilteredInputs(
+                    { 'routable to output': 'open' },
+                    inputs,
+                    names,
+                    outputs
+                )
+            )
+        ).toEqual(['in-1', 'in-10']);
+        expect(
+            Object.keys(
+                getFilteredInputs(
+                    { 'routable to output': 'missing' },
+                    inputs,
+                    names,
+                    outputs
+                )
+            )
+        ).toEqual([]);
+    });
+
+    it('includes Unrouted only when the output allows it', () => {
+        expect(filterRoutableToOutput('open', null, outputs)).toBe(true);
+        expect(
+            filterRoutableToOutput('listed', null, {
+                listed: { caps: { routable_inputs: ['in-1', null] } },
+            })
+        ).toBe(true);
+        expect(filterRoutableToOutput('listed', null, outputs)).toBe(false);
+        expect(filterRoutableToOutput('missing', null, outputs)).toBe(false);
     });
 });
 

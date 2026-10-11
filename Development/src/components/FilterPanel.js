@@ -19,6 +19,12 @@ import FilterListIcon from '@material-ui/icons/FilterList';
 
 import labelize from './labelize';
 
+// warn about comma-separated values because basic query cannot express that
+const COMMA_UNSUPPORTED_TITLE =
+    'Basic query syntax does not support multiple values';
+const commaUnsupported = (usingRql, value) =>
+    usingRql === false && typeof value === 'string' && value.includes(',');
+
 const CompactTextField = React.forwardRef(
     ({ classes, InputLabelProps = {}, InputProps = {}, ...props }, ref) => (
         <TextField
@@ -285,6 +291,15 @@ export const NumberFilter = ({
     );
 };
 
+const isInvalidPattern = pattern => {
+    try {
+        RegExp(pattern, 'i');
+        return false;
+    } catch (exception) {
+        return true;
+    }
+};
+
 export const StringFilter = ({
     defaultValue,
     source,
@@ -292,6 +307,8 @@ export const StringFilter = ({
     filter,
     setFilter,
     autoFocus,
+    regex,
+    usingRql,
     ...props
 }) => {
     const [value, setValue] = useState(() => {
@@ -325,6 +342,8 @@ export const StringFilter = ({
             });
         };
     }, [value, setFilter, source]);
+    const invalid = regex && value !== '' && isInvalidPattern(value);
+    const unsupported = commaUnsupported(usingRql, value);
     return (
         <FilterTextField
             label={label}
@@ -337,6 +356,14 @@ export const StringFilter = ({
             onFocus={event => event.target.select()}
             inputRef={inputRef}
             {...props}
+            error={invalid || unsupported}
+            title={
+                invalid
+                    ? 'Invalid regular expression'
+                    : unsupported
+                      ? COMMA_UNSUPPORTED_TITLE
+                      : undefined
+            }
         />
     );
 };
@@ -473,6 +500,7 @@ export const AutocompleteFilter = ({
     filter,
     setFilter,
     autoFocus,
+    usingRql,
     ...props
 }) => {
     const [value, setValue] = useState(() => {
@@ -506,6 +534,7 @@ export const AutocompleteFilter = ({
             });
         };
     }, [value, setFilter, source]);
+    const unsupported = commaUnsupported(usingRql, value);
     return (
         <StyledAutocomplete
             size="small"
@@ -521,6 +550,8 @@ export const AutocompleteFilter = ({
                     size="small"
                     onFocus={event => event.target.select()}
                     inputRef={inputRef}
+                    error={unsupported}
+                    title={unsupported ? COMMA_UNSUPPORTED_TITLE : undefined}
                 />
             )}
             disableClearable
@@ -528,6 +559,9 @@ export const AutocompleteFilter = ({
         />
     );
 };
+
+const supportsUsingRql = element =>
+    element.type === StringFilter || element.type === AutocompleteFilter;
 
 const FilterPanel = ({
     children,
@@ -537,6 +571,7 @@ const FilterPanel = ({
     filterButtonLabel = 'Filters',
     allFilters = true,
     noFilters = false,
+    usingRql,
 }) => {
     const cloneFilter = (child, autoFocus = false) =>
         React.cloneElement(child, {
@@ -544,6 +579,7 @@ const FilterPanel = ({
             filter: filter,
             setFilter: setFilter,
             autoFocus,
+            ...(supportsUsingRql(child) ? { usingRql } : {}),
         });
 
     const [anchorEl, setAnchorEl] = useState(null);
@@ -653,7 +689,12 @@ const FilterPanel = ({
                         >
                             <ClearIcon fontSize="small" />
                         </IconButton>
-                        {displayedFilters[key]}
+                        {/* the chip is created once, so pass the current setting here */}
+                        {supportsUsingRql(displayedFilters[key])
+                            ? React.cloneElement(displayedFilters[key], {
+                                  usingRql,
+                              })
+                            : displayedFilters[key]}
                     </div>
                 ))}
             </div>
